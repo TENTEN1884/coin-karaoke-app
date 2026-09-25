@@ -1,7 +1,7 @@
 import io
 import time
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import qrcode
 import requests
@@ -50,16 +50,23 @@ def request_with_retry(method, url, retries=2, **kwargs):
 
 
 # ── 2. Supabase 방 상태 관리 함수 ──────────────────────────────────
+def room_sort_key(room_number):
+    # room_number는 text 컬럼이라 DB에서 정렬하면 "1,10,11,2,20,3..." 처럼 문자열
+    # 순서가 되어버린다. 숫자로만 된 방 번호는 숫자로, 그 외("VIP1" 등)는 뒤로
+    # 보내 문자열로 정렬한다.
+    try:
+        return (0, int(room_number))
+    except ValueError:
+        return (1, room_number)
+
+
 def load_rooms():
     try:
         res = request_with_retry(
-            "GET",
-            ROOMS_URL,
-            headers=SUPABASE_HEADERS,
-            params={"select": "*", "order": "room_number.asc"},
+            "GET", ROOMS_URL, headers=SUPABASE_HEADERS, params={"select": "*"}
         )
         if res.status_code == 200:
-            return res.json()
+            return sorted(res.json(), key=lambda r: room_sort_key(r["room_number"]))
         st.error(f"Supabase 오류: {res.text}")
     except Exception as e:
         st.error(f"연결 오류: {e}")
@@ -145,6 +152,11 @@ def make_qr_image(data):
     return buf
 
 
+def room_link(room_number):
+    """방 하나를 가리키는 딥링크(?room=...)를 만든다. QR코드와 그리드 타일이 같은 링크 규칙을 쓴다."""
+    return f"?room={quote(str(room_number))}"
+
+
 # ── 3. UI 화면 렌더링 ─────────────────────────────────────────────
 st.set_page_config(page_title="코인노래방 방 현황", layout="centered", page_icon="🎤")
 
@@ -164,7 +176,7 @@ st.markdown(
         background-attachment: fixed;
     }
     [data-testid="stHeader"] { background: transparent; }
-    [data-testid="stMainBlockContainer"] { max-width: 620px; padding-top: 2.5rem; }
+    [data-testid="stMainBlockContainer"] { max-width: 680px; padding-top: 2.5rem; }
 
     .cute-header {
         background: #FFFFFF;
@@ -185,6 +197,49 @@ st.markdown(
         color: #4A3F55 !important;
     }
     [data-testid="stCaptionContainer"] { color: #A88CC2 !important; font-weight: 700 !important; }
+
+    /* 전체 현황 그리드 (방이 많아도 한눈에 보이도록) */
+    .room-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+        gap: 12px;
+        margin-bottom: 8px;
+    }
+    .room-tile {
+        position: relative;
+        display: block;
+        text-decoration: none !important;
+        border-radius: 20px;
+        padding: 14px 14px 28px;
+        min-height: 70px;
+        border: 2px solid transparent;
+        box-shadow: 0 6px 16px rgba(168, 121, 217, 0.14);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .room-tile:hover { transform: translateY(-3px); box-shadow: 0 10px 22px rgba(168, 121, 217, 0.24); }
+    .room-tile.available { background: #CFF9E1; border-color: #6EE7B7; }
+    .room-tile.occupied { background: #FFCBDB; border-color: #FF8FAA; }
+    .room-tile .tile-num { display: block; font-family: 'Jua', sans-serif; font-size: 1.15rem; color: #3F3350; }
+    .room-tile .tile-status { display: block; font-weight: 800; font-size: 0.8rem; color: #5C4F6B; margin-top: 4px; }
+    .room-tile .tile-tag {
+        position: absolute; bottom: 8px; right: 12px;
+        font-size: 0.62rem; font-weight: 800; letter-spacing: 0.03em; color: #5C4F6B; opacity: 0.6;
+    }
+
+    /* 방 상세 화면의 "다른 방 보기" 링크 */
+    .back-link {
+        display: inline-block;
+        text-decoration: none !important;
+        background: #FFFFFF;
+        border: 2px solid #F0DFFF;
+        color: #9B6FE3 !important;
+        font-weight: 800;
+        border-radius: 999px;
+        padding: 10px 22px;
+        margin-bottom: 18px;
+        transition: transform 0.15s ease, background 0.15s ease;
+    }
+    .back-link:hover { background: #FBF3FF; transform: translateY(-1px); }
 
     div[class*="st-key-room_available_"],
     div[class*="st-key-room_occupied_"] {
@@ -267,138 +322,166 @@ if "visit_logged" not in st.session_state:
 
 rooms = load_rooms()
 now = datetime.now(timezone.utc)
+room_numbers = [r["room_number"] for r in rooms]
+selected_room = next((r for r in rooms if r["room_number"] == st.query_params.get("room", "")), None)
 
-st.markdown(
-    """
-    <div class="cute-header">
-        <span class="emoji">🎤</span>
-        <div>
-            <h1>코인노래방 방 현황</h1>
-            <div class="sub">실시간으로 빈 방을 확인하세요</div>
+
+def render_admin():
+    with st.expander("⚙️ 관리자"):
+        admin_pw = st.text_input("관리자 비밀번호", type="password", key="admin_pw")
+
+        if admin_pw and ADMIN_PASSWORD and admin_pw == ADMIN_PASSWORD:
+            st.success("관리자 인증됨")
+
+            st.markdown("#### 방 추가")
+            with st.form("add_room_form"):
+                new_room = st.text_input("새 방 번호 (예: 1, VIP1)")
+                add_submitted = st.form_submit_button("방 추가")
+                if add_submitted:
+                    if new_room.strip():
+                        if create_room(new_room.strip()):
+                            log_event("admin_add_room", new_room.strip())
+                            st.rerun()
+                    else:
+                        st.error("방 번호를 입력해주세요.")
+
+            if rooms:
+                st.markdown("#### 방별 관리")
+                for room in rooms:
+                    cols = st.columns([2, 1, 1])
+                    cols[0].write(f"**{room['room_number']}호**")
+                    if cols[1].button("초기화", key=f"reset_{room['id']}"):
+                        save_room(room["id"], {"is_running": False, "end_time": None, "reported_minutes": None})
+                        log_event("admin_reset_room", room["room_number"])
+                        st.rerun()
+                    if cols[2].button("삭제", key=f"delete_{room['id']}"):
+                        delete_room(room["id"])
+                        log_event("admin_delete_room", room["room_number"])
+                        st.rerun()
+
+                st.markdown("#### 체크인 QR코드")
+                if not APP_BASE_URL:
+                    st.warning("secrets.toml에 APP_BASE_URL(배포된 앱 주소)을 설정하면 방마다 체크인 QR코드를 보여드려요.")
+                else:
+                    qr_room = st.selectbox("QR을 확인할 방", room_numbers, key="qr_room")
+                    checkin_url = f"{APP_BASE_URL}/{room_link(qr_room)}"
+                    st.image(make_qr_image(checkin_url), caption=checkin_url, width=200)
+        elif admin_pw:
+            st.error("비밀번호가 일치하지 않습니다.")
+
+
+def render_overview():
+    st.markdown(
+        """
+        <div class="cute-header">
+            <span class="emoji">🎤</span>
+            <div>
+                <h1>코인노래방 방 현황</h1>
+                <div class="sub">방을 눌러서 체크인하세요</div>
+            </div>
         </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-if not rooms:
-    st.info("아직 등록된 방이 없습니다. 아래 관리자 메뉴에서 방을 추가해주세요.")
-else:
-    empty_rooms = [r for r in rooms if remaining_seconds(r, now) is None or remaining_seconds(r, now) <= 0]
-    running_rooms = sorted(
-        [r for r in rooms if (remaining_seconds(r, now) or 0) > 0],
-        key=lambda r: remaining_seconds(r, now),
+        """,
+        unsafe_allow_html=True,
     )
 
-    st.caption(f"현재 비어있는 방: {len(empty_rooms)} / {len(rooms)}개")
+    if not rooms:
+        st.info("아직 등록된 방이 없습니다. 아래 관리자 메뉴에서 방을 추가해주세요.")
+    else:
+        empty_count = sum(1 for r in rooms if not ((remaining_seconds(r, now) or 0) > 0))
+        st.caption(f"현재 비어있는 방: {empty_count} / {len(rooms)}개")
 
-    # 방마다 카드 내부 구성(제목 + 2열 지표)을 상태와 무관하게 항상 동일하게 유지한다.
-    # 재실행마다 카드 안의 위젯 개수가 늘었다 줄었다 하면 Streamlit이 이전 값을 다 지우지
-    # 못하고 옅게 남기는 경우가 있어서, 비어있을 때도 지표 자리를 "-"로 채워둔다.
-    # key 접두사(room_available_/room_occupied_)는 CSS에서 카드 색을 구분하는 용도.
-    for room in empty_rooms:
-        with st.container(border=True, key=f"room_available_{room['id']}"):
+        tiles = []
+        for room in rooms:
+            secs = remaining_seconds(room, now)
+            link = room_link(room["room_number"])
+            if secs and secs > 0:
+                mins = int(secs // 60)
+                tiles.append(
+                    f'<a href="{link}" target="_self" class="room-tile occupied">'
+                    f'<span class="tile-num">{room["room_number"]}호</span>'
+                    f'<span class="tile-status">{mins}분 남음</span>'
+                    f'<span class="tile-tag">IN USE</span></a>'
+                )
+            else:
+                tiles.append(
+                    f'<a href="{link}" target="_self" class="room-tile available">'
+                    f'<span class="tile-num">{room["room_number"]}호</span>'
+                    f'<span class="tile-status">사용 가능</span>'
+                    f'<span class="tile-tag">EMPTY</span></a>'
+                )
+        st.markdown(f'<div class="room-grid">{"".join(tiles)}</div>', unsafe_allow_html=True)
+
+    st.divider()
+    render_admin()
+    st.divider()
+    st.caption("🛠️ 오류가 발생하거나 앱이 작동하지 않을 때는 운영자에게 문의해주세요.")
+
+
+def render_detail(room):
+    st.markdown('<a href="?" target="_self" class="back-link">← 다른 방 보기</a>', unsafe_allow_html=True)
+
+    st.markdown(
+        f"""
+        <div class="cute-header">
+            <span class="emoji">🎤</span>
+            <div>
+                <h1>{room['room_number']}호</h1>
+                <div class="sub">체크인 / 시간 갱신</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    secs = remaining_seconds(room, now)
+    occupied = secs is not None and secs > 0
+    card_key = f"room_occupied_{room['id']}" if occupied else f"room_available_{room['id']}"
+
+    with st.container(border=True, key=card_key):
+        if occupied:
+            mins, s = int(secs // 60), int(secs % 60)
+            end_local = parse_end_time(room).astimezone(KST)
             st.markdown(
-                f'<div class="room-card-head"><span class="room-num">{room["room_number"]}호</span>'
-                '<span class="status-pill available">사용 가능 ✨</span></div>',
+                '<div class="room-card-head"><span class="status-pill occupied">사용중 🎤</span></div>',
+                unsafe_allow_html=True,
+            )
+            col1, col2 = st.columns(2)
+            col1.metric("남은 시간", f"{mins}분 {s}초")
+            col2.metric("종료 예정", end_local.strftime("%H:%M"))
+        else:
+            st.markdown(
+                '<div class="room-card-head"><span class="status-pill available">사용 가능 ✨</span></div>',
                 unsafe_allow_html=True,
             )
             col1, col2 = st.columns(2)
             col1.metric("남은 시간", "-")
             col2.metric("종료 예정", "-")
 
-    for room in running_rooms:
-        secs = remaining_seconds(room, now)
-        mins, s = int(secs // 60), int(secs % 60)
-        end_local = parse_end_time(room).astimezone(KST)
-        with st.container(border=True, key=f"room_occupied_{room['id']}"):
-            st.markdown(
-                f'<div class="room-card-head"><span class="room-num">{room["room_number"]}호</span>'
-                '<span class="status-pill occupied">사용중 🎤</span></div>',
-                unsafe_allow_html=True,
-            )
-            col1, col2 = st.columns(2)
-            col1.metric("남은 시간", f"{mins}분 {s}초")
-            col2.metric("종료 예정", end_local.strftime("%H:%M"))
+    st.caption("기기 화면에 표시된 '남은 시간'을 그대로 입력해주세요. 추가 결제로 시간이 늘어났을 때도 같은 방법으로 다시 입력하면 갱신됩니다.")
 
-st.divider()
-
-# ── 4. 손님 체크인 (QR로 들어오면 방이 자동 선택됨) ─────────────────
-st.subheader("📱 체크인 / 시간 갱신")
-st.caption("방에 들어가면 기기 화면에 표시된 '남은 시간'을 그대로 입력해주세요. 추가 결제로 시간이 늘어났을 때도 같은 방법으로 다시 입력하면 갱신됩니다.")
-
-room_numbers = [r["room_number"] for r in rooms]
-query_room = st.query_params.get("room", "")
-default_index = room_numbers.index(query_room) if query_room in room_numbers else 0
-
-if room_numbers:
-    with st.form("checkin_form"):
-        selected_room = st.selectbox("방 번호", room_numbers, index=default_index)
+    with st.form("checkin_form_detail"):
         minutes = st.number_input("기기에 표시된 남은 시간(분)", min_value=1, max_value=300, value=30, step=5)
         submitted = st.form_submit_button("체크인 / 시간 갱신 🎤", type="primary", use_container_width=True)
-
         if submitted:
-            target = next(r for r in rooms if r["room_number"] == selected_room)
             end_time = datetime.now(timezone.utc) + timedelta(minutes=int(minutes))
             save_room(
-                target["id"],
+                room["id"],
                 {"is_running": True, "end_time": end_time.isoformat(), "reported_minutes": int(minutes)},
             )
-            log_event("check_in", selected_room)
-            st.success(f"{selected_room}호 체크인 완료! 잠시 후 화면이 갱신됩니다.")
+            log_event("check_in", room["room_number"])
+            st.success(f"{room['room_number']}호 체크인 완료! 잠시 후 화면이 갱신됩니다.")
             time.sleep(1)
             st.rerun()
+
+    st.divider()
+    st.caption("🛠️ 오류가 발생하거나 앱이 작동하지 않을 때는 운영자에게 문의해주세요.")
+
+
+if selected_room:
+    render_detail(selected_room)
 else:
-    st.info("등록된 방이 없어 체크인할 수 없습니다.")
+    render_overview()
 
-st.divider()
-
-# ── 5. 관리자 (방 등록/삭제, 강제 초기화, 체크인 QR코드) ────────────
-with st.expander("⚙️ 관리자"):
-    admin_pw = st.text_input("관리자 비밀번호", type="password", key="admin_pw")
-
-    if admin_pw and ADMIN_PASSWORD and admin_pw == ADMIN_PASSWORD:
-        st.success("관리자 인증됨")
-
-        st.markdown("#### 방 추가")
-        with st.form("add_room_form"):
-            new_room = st.text_input("새 방 번호 (예: 1, VIP1)")
-            add_submitted = st.form_submit_button("방 추가")
-            if add_submitted:
-                if new_room.strip():
-                    if create_room(new_room.strip()):
-                        log_event("admin_add_room", new_room.strip())
-                        st.rerun()
-                else:
-                    st.error("방 번호를 입력해주세요.")
-
-        if rooms:
-            st.markdown("#### 방별 관리")
-            for room in rooms:
-                cols = st.columns([2, 1, 1])
-                cols[0].write(f"**{room['room_number']}호**")
-                if cols[1].button("초기화", key=f"reset_{room['id']}"):
-                    save_room(room["id"], {"is_running": False, "end_time": None, "reported_minutes": None})
-                    log_event("admin_reset_room", room["room_number"])
-                    st.rerun()
-                if cols[2].button("삭제", key=f"delete_{room['id']}"):
-                    delete_room(room["id"])
-                    log_event("admin_delete_room", room["room_number"])
-                    st.rerun()
-
-            st.markdown("#### 체크인 QR코드")
-            if not APP_BASE_URL:
-                st.warning("secrets.toml에 APP_BASE_URL(배포된 앱 주소)을 설정하면 방마다 체크인 QR코드를 보여드려요.")
-            else:
-                qr_room = st.selectbox("QR을 확인할 방", room_numbers, key="qr_room")
-                checkin_url = f"{APP_BASE_URL}/?room={qr_room}"
-                st.image(make_qr_image(checkin_url), caption=checkin_url, width=200)
-    elif admin_pw:
-        st.error("비밀번호가 일치하지 않습니다.")
-
-st.divider()
-st.caption("🛠️ 오류가 발생하거나 앱이 작동하지 않을 때는 운영자에게 문의해주세요.")
-
-# ── 6. 자동 새로고침 ────────────────────────────────────────────
+# ── 4. 자동 새로고침 ────────────────────────────────────────────
 time.sleep(10)
 st.rerun()
