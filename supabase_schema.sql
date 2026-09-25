@@ -7,9 +7,15 @@ create table if not exists karaoke_rooms (
     is_running boolean not null default false,
     end_time timestamptz,
     reported_minutes int,
+    -- 체크인 시 고른 결제 방식('time' 또는 'songs'). 방이 사용중인 동안은 이
+    -- 방식으로만 시간을 추가할 수 있고, 빈 방으로 초기화되면 null로 돌아간다.
+    charge_mode text,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
 );
+
+-- 기존에 만들어둔 테이블에 나중에 이 컬럼만 추가하는 경우를 위한 구문.
+alter table karaoke_rooms add column if not exists charge_mode text;
 
 create table if not exists karaoke_analytics_events (
     id bigint generated always as identity primary key,

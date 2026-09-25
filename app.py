@@ -163,6 +163,29 @@ def room_link(room_number):
     return f"?room={quote(str(room_number))}"
 
 
+def start_checkin(room, minutes, mode):
+    # charge_mode를 함께 저장해서, 다음에 추가할 때는 처음 고른 방식(시간/곡수)
+    # 으로만 추가할 수 있도록 한다 - 매번 다시 고르게 하면 혼란스러워서.
+    end_time = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    save_room(
+        room["id"],
+        {"is_running": True, "end_time": end_time.isoformat(), "reported_minutes": minutes, "charge_mode": mode},
+    )
+    log_event("check_in", room["room_number"])
+    st.success(f"{room['room_number']}호 체크인 완료! 잠시 후 화면이 갱신됩니다.")
+    time.sleep(1)
+    st.rerun()
+
+
+def extend_time(room, add_minutes, label):
+    current_end = parse_end_time(room) or datetime.now(timezone.utc)
+    save_room(room["id"], {"end_time": (current_end + timedelta(minutes=add_minutes)).isoformat()})
+    log_event("extend_time", room["room_number"])
+    st.success(f"{label} 추가 완료!")
+    time.sleep(1)
+    st.rerun()
+
+
 # ── 3. UI 화면 렌더링 ─────────────────────────────────────────────
 st.set_page_config(page_title="코인노래방 방 현황", layout="centered", page_icon="🎤")
 
@@ -361,7 +384,10 @@ def render_admin():
                     cols = st.columns([2, 1, 1])
                     cols[0].write(f"**{room['room_number']}호**")
                     if cols[1].button("초기화", key=f"reset_{room['id']}"):
-                        save_room(room["id"], {"is_running": False, "end_time": None, "reported_minutes": None})
+                        save_room(
+                            room["id"],
+                            {"is_running": False, "end_time": None, "reported_minutes": None, "charge_mode": None},
+                        )
                         log_event("admin_reset_room", room["room_number"])
                         st.rerun()
                     if cols[2].button("삭제", key=f"delete_{room['id']}"):
@@ -468,64 +494,93 @@ def render_detail(room):
             col2.metric("종료 예정", "-")
 
     if occupied:
-        st.markdown("#### 🎶 추가 시간 갱신")
-        st.caption("추가로 결제한 곡 수를 고르면 남은 시간에 더해져요.")
+        # 이미 시작할 때 고른 방식(시간/곡수)으로만 추가할 수 있다 - 기존 데이터에는
+        # charge_mode가 없을 수 있어 기본값은 "시간"으로 둔다.
+        mode = room.get("charge_mode") or "time"
 
-        song_cols = st.columns(len(SONG_PRESETS))
-        for col, songs in zip(song_cols, SONG_PRESETS):
-            add_minutes = round(songs * MINUTES_PER_SONG)
-            clicked = col.button(
-                f"{songs}곡",
-                key=f"add_{songs}_{room['id']}",
-                type="primary",
-                use_container_width=True,
-                help=f"약 {add_minutes}분 추가돼요",
-            )
-            if clicked:
-                current_end = parse_end_time(room) or datetime.now(timezone.utc)
-                save_room(room["id"], {"end_time": (current_end + timedelta(minutes=add_minutes)).isoformat()})
-                log_event("extend_time", room["room_number"])
-                st.success(f"{songs}곡(약 {add_minutes}분) 추가 완료!")
-                time.sleep(1)
-                st.rerun()
+        if mode == "songs":
+            st.markdown("#### 🎶 추가 시간 갱신 (곡 수)")
+            st.caption("추가로 결제한 곡 수를 고르면 남은 시간에 더해져요.")
 
-        show_custom = st.toggle("그 외 (직접 곡 수 입력)", key=f"custom_toggle_{room['id']}")
-        if show_custom:
-            custom_songs = st.number_input(
-                "추가할 곡 수", min_value=1, max_value=50, value=1, step=1, key=f"custom_songs_{room['id']}"
-            )
-            if st.button("추가하기", key=f"custom_add_{room['id']}", type="primary", use_container_width=True):
-                add_minutes = round(custom_songs * MINUTES_PER_SONG)
-                current_end = parse_end_time(room) or datetime.now(timezone.utc)
-                save_room(room["id"], {"end_time": (current_end + timedelta(minutes=add_minutes)).isoformat()})
-                log_event("extend_time", room["room_number"])
-                st.success(f"{custom_songs}곡(약 {add_minutes}분) 추가 완료!")
-                time.sleep(1)
-                st.rerun()
+            song_cols = st.columns(len(SONG_PRESETS))
+            for col, songs in zip(song_cols, SONG_PRESETS):
+                add_minutes = round(songs * MINUTES_PER_SONG)
+                clicked = col.button(
+                    f"{songs}곡",
+                    key=f"add_{songs}_{room['id']}",
+                    type="primary",
+                    use_container_width=True,
+                    help=f"약 {add_minutes}분 추가돼요",
+                )
+                if clicked:
+                    extend_time(room, add_minutes, f"{songs}곡(약 {add_minutes}분)")
+
+            show_custom = st.toggle("그 외 (직접 곡 수 입력)", key=f"custom_toggle_{room['id']}")
+            if show_custom:
+                custom_songs = st.number_input(
+                    "추가할 곡 수", min_value=1, max_value=50, value=1, step=1, key=f"custom_songs_{room['id']}"
+                )
+                if st.button("추가하기", key=f"custom_add_{room['id']}", type="primary", use_container_width=True):
+                    add_minutes = round(custom_songs * MINUTES_PER_SONG)
+                    extend_time(room, add_minutes, f"{custom_songs}곡(약 {add_minutes}분)")
+        else:
+            st.markdown("#### ⏱️ 추가 시간 갱신 (시간)")
+            with st.form(f"extend_time_form_{room['id']}"):
+                add_minutes = st.number_input("추가할 시간(분)", min_value=1, max_value=180, value=10, step=5)
+                submitted = st.form_submit_button("추가하기", type="primary", use_container_width=True)
+                if submitted:
+                    extend_time(room, int(add_minutes), f"{int(add_minutes)}분")
 
         st.divider()
         st.caption("아직 시간이 남았지만 먼저 나가시나요? 누르면 이 방이 바로 빈 방으로 표시돼요.")
         if st.button("🚪 중단하고 나가기", key=f"early_exit_{room['id']}", use_container_width=True):
-            save_room(room["id"], {"is_running": False, "end_time": None, "reported_minutes": None})
+            save_room(
+                room["id"],
+                {"is_running": False, "end_time": None, "reported_minutes": None, "charge_mode": None},
+            )
             log_event("early_exit", room["room_number"])
             st.success(f"{room['room_number']}호, 이용해주셔서 감사합니다! 방을 비웠어요.")
             time.sleep(1)
             st.rerun()
     else:
-        st.caption("기기 화면에 표시된 '남은 시간'을 그대로 입력해주세요.")
-        with st.form("checkin_form_detail"):
-            minutes = st.number_input("기기에 표시된 남은 시간(분)", min_value=1, max_value=300, value=30, step=5)
-            submitted = st.form_submit_button("체크인 / 시간 갱신 🎤", type="primary", use_container_width=True)
-            if submitted:
-                end_time = datetime.now(timezone.utc) + timedelta(minutes=int(minutes))
-                save_room(
-                    room["id"],
-                    {"is_running": True, "end_time": end_time.isoformat(), "reported_minutes": int(minutes)},
+        st.markdown("#### 📱 체크인 방식 선택")
+        mode_label = st.segmented_control(
+            "무엇을 기준으로 결제하셨나요?",
+            ["⏱️ 시간으로", "🎵 곡 수로"],
+            default="⏱️ 시간으로",
+            key=f"start_mode_{room['id']}",
+        )
+
+        if mode_label == "🎵 곡 수로":
+            st.caption("결제하신 곡 수를 골라주세요. 이후 추가도 곡 수로만 가능해요.")
+            song_cols = st.columns(len(SONG_PRESETS))
+            for col, songs in zip(song_cols, SONG_PRESETS):
+                add_minutes = round(songs * MINUTES_PER_SONG)
+                clicked = col.button(
+                    f"{songs}곡",
+                    key=f"start_song_{songs}_{room['id']}",
+                    type="primary",
+                    use_container_width=True,
+                    help=f"약 {add_minutes}분",
                 )
-                log_event("check_in", room["room_number"])
-                st.success(f"{room['room_number']}호 체크인 완료! 잠시 후 화면이 갱신됩니다.")
-                time.sleep(1)
-                st.rerun()
+                if clicked:
+                    start_checkin(room, add_minutes, "songs")
+
+            show_custom = st.toggle("그 외 (직접 곡 수 입력)", key=f"start_custom_toggle_{room['id']}")
+            if show_custom:
+                custom_songs = st.number_input(
+                    "곡 수", min_value=1, max_value=50, value=1, step=1, key=f"start_custom_songs_{room['id']}"
+                )
+                if st.button("체크인", key=f"start_custom_btn_{room['id']}", type="primary", use_container_width=True):
+                    add_minutes = round(custom_songs * MINUTES_PER_SONG)
+                    start_checkin(room, add_minutes, "songs")
+        else:
+            st.caption("기기 화면에 표시된 '남은 시간'을 그대로 입력해주세요. 이후 추가도 시간으로만 가능해요.")
+            with st.form(f"checkin_form_time_{room['id']}"):
+                minutes = st.number_input("기기에 표시된 남은 시간(분)", min_value=1, max_value=300, value=30, step=5)
+                submitted = st.form_submit_button("체크인 / 시간 갱신 🎤", type="primary", use_container_width=True)
+                if submitted:
+                    start_checkin(room, int(minutes), "time")
 
     st.divider()
     st.caption("🛠️ 오류가 발생하거나 앱이 작동하지 않을 때는 운영자에게 문의해주세요.")
