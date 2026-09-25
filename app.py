@@ -26,6 +26,12 @@ EVENTS_URL = f"{SUPABASE_URL}/rest/v1/karaoke_analytics_events"
 # 한국 표준시 (UTC+9) - 종료 예정 시각을 로컬 시간으로 보여주기 위함
 KST = timezone(timedelta(hours=9))
 
+# 코인노래방은 시간이 아니라 곡 수로 결제하는 경우가 많아, 곡 수를 분으로 환산해
+# 기존 종료 시각 로직에 그대로 얹는다. 3.5분/곡은 평균치 추정값이라 버튼에 예상
+# 분을 함께 보여줘 손님이 확인할 수 있게 한다.
+MINUTES_PER_SONG = 3.5
+SONG_PRESETS = [3, 6, 9, 12]
+
 SUPABASE_HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -192,7 +198,9 @@ st.markdown(
     .cute-header h1 { font-family: 'Jua', sans-serif; font-size: 1.6rem; color: #4A3F55; margin: 0; }
     .cute-header .sub { font-size: 0.85rem; color: #B79ACB; font-weight: 700; margin-top: 2px; }
 
-    [data-testid="stHeading"] h2, [data-testid="stHeading"] h3 {
+    [data-testid="stHeading"] h2, [data-testid="stHeading"] h3,
+    [data-testid="stMarkdownContainer"] h1, [data-testid="stMarkdownContainer"] h2,
+    [data-testid="stMarkdownContainer"] h3, [data-testid="stMarkdownContainer"] h4 {
         font-family: 'Jua', sans-serif !important;
         color: #4A3F55 !important;
     }
@@ -268,13 +276,15 @@ st.markdown(
         font-weight: 800 !important;
         transition: transform 0.15s ease, box-shadow 0.15s ease !important;
     }
-    [data-testid="stBaseButton-primaryFormSubmit"] {
+    [data-testid="stBaseButton-primaryFormSubmit"],
+    [data-testid="stBaseButton-primary"] {
         background: linear-gradient(135deg, #FF6FA5, #C084FC) !important;
         border: none !important;
         color: #fff !important;
         box-shadow: 0 8px 18px rgba(255, 111, 165, 0.35) !important;
     }
-    [data-testid="stBaseButton-primaryFormSubmit"]:hover { transform: translateY(-2px); box-shadow: 0 10px 22px rgba(255, 111, 165, 0.45) !important; }
+    [data-testid="stBaseButton-primaryFormSubmit"]:hover,
+    [data-testid="stBaseButton-primary"]:hover { transform: translateY(-2px); box-shadow: 0 10px 22px rgba(255, 111, 165, 0.45) !important; }
     [data-testid="stBaseButton-secondaryFormSubmit"],
     [data-testid="stBaseButton-secondary"] {
         background: #FFFFFF !important;
@@ -457,21 +467,65 @@ def render_detail(room):
             col1.metric("남은 시간", "-")
             col2.metric("종료 예정", "-")
 
-    st.caption("기기 화면에 표시된 '남은 시간'을 그대로 입력해주세요. 추가 결제로 시간이 늘어났을 때도 같은 방법으로 다시 입력하면 갱신됩니다.")
+    if occupied:
+        st.markdown("#### 🎶 추가 시간 갱신")
+        st.caption("추가로 결제한 곡 수를 고르면 남은 시간에 더해져요.")
 
-    with st.form("checkin_form_detail"):
-        minutes = st.number_input("기기에 표시된 남은 시간(분)", min_value=1, max_value=300, value=30, step=5)
-        submitted = st.form_submit_button("체크인 / 시간 갱신 🎤", type="primary", use_container_width=True)
-        if submitted:
-            end_time = datetime.now(timezone.utc) + timedelta(minutes=int(minutes))
-            save_room(
-                room["id"],
-                {"is_running": True, "end_time": end_time.isoformat(), "reported_minutes": int(minutes)},
+        song_cols = st.columns(len(SONG_PRESETS))
+        for col, songs in zip(song_cols, SONG_PRESETS):
+            add_minutes = round(songs * MINUTES_PER_SONG)
+            clicked = col.button(
+                f"{songs}곡",
+                key=f"add_{songs}_{room['id']}",
+                type="primary",
+                use_container_width=True,
+                help=f"약 {add_minutes}분 추가돼요",
             )
-            log_event("check_in", room["room_number"])
-            st.success(f"{room['room_number']}호 체크인 완료! 잠시 후 화면이 갱신됩니다.")
+            if clicked:
+                current_end = parse_end_time(room) or datetime.now(timezone.utc)
+                save_room(room["id"], {"end_time": (current_end + timedelta(minutes=add_minutes)).isoformat()})
+                log_event("extend_time", room["room_number"])
+                st.success(f"{songs}곡(약 {add_minutes}분) 추가 완료!")
+                time.sleep(1)
+                st.rerun()
+
+        show_custom = st.toggle("그 외 (직접 곡 수 입력)", key=f"custom_toggle_{room['id']}")
+        if show_custom:
+            custom_songs = st.number_input(
+                "추가할 곡 수", min_value=1, max_value=50, value=1, step=1, key=f"custom_songs_{room['id']}"
+            )
+            if st.button("추가하기", key=f"custom_add_{room['id']}", type="primary", use_container_width=True):
+                add_minutes = round(custom_songs * MINUTES_PER_SONG)
+                current_end = parse_end_time(room) or datetime.now(timezone.utc)
+                save_room(room["id"], {"end_time": (current_end + timedelta(minutes=add_minutes)).isoformat()})
+                log_event("extend_time", room["room_number"])
+                st.success(f"{custom_songs}곡(약 {add_minutes}분) 추가 완료!")
+                time.sleep(1)
+                st.rerun()
+
+        st.divider()
+        st.caption("아직 시간이 남았지만 먼저 나가시나요? 누르면 이 방이 바로 빈 방으로 표시돼요.")
+        if st.button("🚪 중단하고 나가기", key=f"early_exit_{room['id']}", use_container_width=True):
+            save_room(room["id"], {"is_running": False, "end_time": None, "reported_minutes": None})
+            log_event("early_exit", room["room_number"])
+            st.success(f"{room['room_number']}호, 이용해주셔서 감사합니다! 방을 비웠어요.")
             time.sleep(1)
             st.rerun()
+    else:
+        st.caption("기기 화면에 표시된 '남은 시간'을 그대로 입력해주세요.")
+        with st.form("checkin_form_detail"):
+            minutes = st.number_input("기기에 표시된 남은 시간(분)", min_value=1, max_value=300, value=30, step=5)
+            submitted = st.form_submit_button("체크인 / 시간 갱신 🎤", type="primary", use_container_width=True)
+            if submitted:
+                end_time = datetime.now(timezone.utc) + timedelta(minutes=int(minutes))
+                save_room(
+                    room["id"],
+                    {"is_running": True, "end_time": end_time.isoformat(), "reported_minutes": int(minutes)},
+                )
+                log_event("check_in", room["room_number"])
+                st.success(f"{room['room_number']}호 체크인 완료! 잠시 후 화면이 갱신됩니다.")
+                time.sleep(1)
+                st.rerun()
 
     st.divider()
     st.caption("🛠️ 오류가 발생하거나 앱이 작동하지 않을 때는 운영자에게 문의해주세요.")
