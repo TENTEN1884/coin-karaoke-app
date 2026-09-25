@@ -150,6 +150,12 @@ def remaining_seconds(room, now):
     return (end_time - now).total_seconds()
 
 
+def estimate_end_time_str(base_time, add_minutes):
+    """분 단위 숫자보다 "몇 시에 끝나는지"가 손님에게 더 와닿아서, 프리셋/직접입력
+    옆에 실제 시계 시각으로 미리 보여준다."""
+    return (base_time + timedelta(minutes=add_minutes)).astimezone(KST).strftime("%H:%M")
+
+
 def make_qr_image(data):
     qr = qrcode.make(data)
     buf = io.BytesIO()
@@ -502,16 +508,15 @@ def render_detail(room):
             st.markdown("#### 🎶 추가 시간 갱신 (곡 수)")
             st.caption("추가로 결제한 곡 수를 고르면 남은 시간에 더해져요.")
 
+            extend_base = parse_end_time(room) or now
             song_cols = st.columns(len(SONG_PRESETS))
             for col, songs in zip(song_cols, SONG_PRESETS):
                 add_minutes = round(songs * MINUTES_PER_SONG)
-                clicked = col.button(
-                    f"{songs}곡",
-                    key=f"add_{songs}_{room['id']}",
-                    type="primary",
-                    use_container_width=True,
-                    help=f"약 {add_minutes}분 추가돼요",
-                )
+                with col:
+                    clicked = st.button(
+                        f"{songs}곡", key=f"add_{songs}_{room['id']}", type="primary", use_container_width=True
+                    )
+                    st.caption(f"~{estimate_end_time_str(extend_base, add_minutes)}")
                 if clicked:
                     extend_time(room, add_minutes, f"{songs}곡(약 {add_minutes}분)")
 
@@ -520,9 +525,10 @@ def render_detail(room):
                 custom_songs = st.number_input(
                     "추가할 곡 수", min_value=1, max_value=50, value=1, step=1, key=f"custom_songs_{room['id']}"
                 )
+                custom_minutes = round(custom_songs * MINUTES_PER_SONG)
+                st.caption(f"🕐 예상 종료 시간: {estimate_end_time_str(extend_base, custom_minutes)}")
                 if st.button("추가하기", key=f"custom_add_{room['id']}", type="primary", use_container_width=True):
-                    add_minutes = round(custom_songs * MINUTES_PER_SONG)
-                    extend_time(room, add_minutes, f"{custom_songs}곡(약 {add_minutes}분)")
+                    extend_time(room, custom_minutes, f"{custom_songs}곡(약 {custom_minutes}분)")
         else:
             st.markdown("#### ⏱️ 추가 시간 갱신 (시간)")
             with st.form(f"extend_time_form_{room['id']}"):
@@ -556,13 +562,11 @@ def render_detail(room):
             song_cols = st.columns(len(SONG_PRESETS))
             for col, songs in zip(song_cols, SONG_PRESETS):
                 add_minutes = round(songs * MINUTES_PER_SONG)
-                clicked = col.button(
-                    f"{songs}곡",
-                    key=f"start_song_{songs}_{room['id']}",
-                    type="primary",
-                    use_container_width=True,
-                    help=f"약 {add_minutes}분",
-                )
+                with col:
+                    clicked = st.button(
+                        f"{songs}곡", key=f"start_song_{songs}_{room['id']}", type="primary", use_container_width=True
+                    )
+                    st.caption(f"~{estimate_end_time_str(now, add_minutes)}")
                 if clicked:
                     start_checkin(room, add_minutes, "songs")
 
@@ -571,9 +575,10 @@ def render_detail(room):
                 custom_songs = st.number_input(
                     "곡 수", min_value=1, max_value=50, value=1, step=1, key=f"start_custom_songs_{room['id']}"
                 )
+                custom_minutes = round(custom_songs * MINUTES_PER_SONG)
+                st.caption(f"🕐 예상 종료 시간: {estimate_end_time_str(now, custom_minutes)}")
                 if st.button("체크인", key=f"start_custom_btn_{room['id']}", type="primary", use_container_width=True):
-                    add_minutes = round(custom_songs * MINUTES_PER_SONG)
-                    start_checkin(room, add_minutes, "songs")
+                    start_checkin(room, custom_minutes, "songs")
         else:
             st.caption("기기 화면에 표시된 '남은 시간'을 그대로 입력해주세요. 이후 추가도 시간으로만 가능해요.")
             with st.form(f"checkin_form_time_{room['id']}"):
