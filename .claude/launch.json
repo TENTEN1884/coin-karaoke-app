@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "coin-karaoke-app",
+      "runtimeExecutable": "C:/Users/EUN/AppData/Local/Programs/Python/Launcher/py.exe",
+      "runtimeArgs": ["-m", "streamlit", "run", "C:/Users/EUN/OneDrive - 東京女子大学/바탕 화면/클로드코드/어플 확장/app.py", "--server.port=8502", "--server.headless=true"],
+      "port": 8502
+    }
+  ]
+}
