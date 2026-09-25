@@ -148,16 +148,114 @@ def make_qr_image(data):
 # ── 3. UI 화면 렌더링 ─────────────────────────────────────────────
 st.set_page_config(page_title="코인노래방 방 현황", layout="centered", page_icon="🎤")
 
-# 화면이 자동으로 자주 새로고침되면서 이전 화면 요소가 옅게 남았다가 사라지는
-# 전환 애니메이션(잔상 현상)이 보일 수 있어, 관련 트랜지션/애니메이션을 꺼서
-# 화면이 바로바로 전환되도록 한다.
+# 20~30대가 선호할 만한 파스텔톤 카드 디자인. 방 카드는 key 접두사(room_available_/
+# room_occupied_)로 상태를 구분해 CSS에서 각각 다른 색을 입힌다. 자동 새로고침으로
+# 텍스트만 바뀌는 요소(지표, 카드 제목)는 transition을 꺼서 깜빡임을 막는다.
 st.markdown(
     """
     <style>
-    [data-testid="stAppViewContainer"] * {
-        transition: none !important;
-        animation: none !important;
+    @import url('https://fonts.googleapis.com/css2?family=Jua&family=Nunito:wght@400;600;700;800&display=swap');
+
+    html, body, [data-testid="stAppViewContainer"] {
+        font-family: 'Nunito', 'Noto Sans KR', sans-serif;
     }
+    [data-testid="stAppViewContainer"] {
+        background: linear-gradient(160deg, #FFE3F1 0%, #F2E4FF 45%, #E2EFFF 100%);
+        background-attachment: fixed;
+    }
+    [data-testid="stHeader"] { background: transparent; }
+    [data-testid="stMainBlockContainer"] { max-width: 620px; padding-top: 2.5rem; }
+
+    .cute-header {
+        background: #FFFFFF;
+        border-radius: 28px;
+        padding: 22px 28px;
+        box-shadow: 0 10px 30px rgba(168, 121, 217, 0.18);
+        margin-bottom: 22px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+    }
+    .cute-header .emoji { font-size: 2.2rem; }
+    .cute-header h1 { font-family: 'Jua', sans-serif; font-size: 1.6rem; color: #4A3F55; margin: 0; }
+    .cute-header .sub { font-size: 0.85rem; color: #B79ACB; font-weight: 700; margin-top: 2px; }
+
+    [data-testid="stHeading"] h2, [data-testid="stHeading"] h3 {
+        font-family: 'Jua', sans-serif !important;
+        color: #4A3F55 !important;
+    }
+    [data-testid="stCaptionContainer"] { color: #A88CC2 !important; font-weight: 700 !important; }
+
+    div[class*="st-key-room_available_"],
+    div[class*="st-key-room_occupied_"] {
+        background: #FFFFFF !important;
+        border: none !important;
+        border-radius: 22px !important;
+        padding: 18px 22px !important;
+        box-shadow: 0 8px 22px rgba(168, 121, 217, 0.14);
+        margin-bottom: 16px !important;
+    }
+    div[class*="st-key-room_available_"] { border-left: 8px solid #4ADE80 !important; }
+    div[class*="st-key-room_occupied_"] { border-left: 8px solid #FF7A9C !important; }
+
+    .room-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; transition: none !important; }
+    .room-num { font-family: 'Jua', sans-serif; font-size: 1.35rem; color: #4A3F55; }
+    .status-pill { display: inline-block; padding: 6px 18px; border-radius: 999px; font-weight: 800; font-size: 0.85rem; border: 1.5px solid transparent; }
+    .status-pill.available { background: #6EE7B7; color: #065F46; border-color: #34D399; }
+    .status-pill.occupied { background: #FF9DB5; color: #881337; border-color: #FF6F91; }
+
+    [data-testid="stMetric"] { background: #FFF7FB; border-radius: 16px; padding: 10px 16px; transition: none !important; }
+    [data-testid="stMetricValue"] { font-family: 'Jua', sans-serif !important; color: #FF6FA5 !important; font-size: 1.5rem !important; transition: none !important; }
+    [data-testid="stMetricLabel"] p { color: #B79ACB !important; font-weight: 700 !important; font-size: 0.78rem !important; }
+
+    .stButton button, [data-testid^="stBaseButton"] {
+        border-radius: 999px !important;
+        font-weight: 800 !important;
+        transition: transform 0.15s ease, box-shadow 0.15s ease !important;
+    }
+    [data-testid="stBaseButton-primaryFormSubmit"] {
+        background: linear-gradient(135deg, #FF6FA5, #C084FC) !important;
+        border: none !important;
+        color: #fff !important;
+        box-shadow: 0 8px 18px rgba(255, 111, 165, 0.35) !important;
+    }
+    [data-testid="stBaseButton-primaryFormSubmit"]:hover { transform: translateY(-2px); box-shadow: 0 10px 22px rgba(255, 111, 165, 0.45) !important; }
+    [data-testid="stBaseButton-secondaryFormSubmit"],
+    [data-testid="stBaseButton-secondary"] {
+        background: #FFFFFF !important;
+        border: 2px solid #F0DFFF !important;
+        color: #9B6FE3 !important;
+    }
+    [data-testid="stBaseButton-secondaryFormSubmit"]:hover,
+    [data-testid="stBaseButton-secondary"]:hover { background: #FBF3FF !important; transform: translateY(-1px); }
+
+    [data-testid="stNumberInputContainer"],
+    [data-testid="stTextInputRootElement"],
+    [data-testid="stSelectbox"] div[role="group"] {
+        border-radius: 16px !important;
+        border: 2px solid #F1E0FF !important;
+        background: #FFFDFF !important;
+    }
+    [data-testid="stSelectbox"] input,
+    [data-testid="stNumberInputField"],
+    [data-testid="stTextInputField"] { font-weight: 700 !important; color: #4A3F55 !important; }
+    [data-testid="stWidgetLabel"] p { color: #8C76A6 !important; font-weight: 700 !important; font-size: 0.85rem !important; }
+
+    [data-testid="stForm"] {
+        background: #FFFFFF;
+        border: none !important;
+        border-radius: 24px;
+        padding: 22px !important;
+        box-shadow: 0 8px 22px rgba(168, 121, 217, 0.12);
+    }
+    [data-testid="stExpander"] {
+        background: #FFFFFF;
+        border-radius: 20px !important;
+        border: 2px dashed #E9D3FF !important;
+        overflow: hidden;
+    }
+    [data-testid="stAlertContainer"] { border-radius: 18px !important; border: none !important; font-weight: 600; }
+    [data-testid="stMarkdownContainer"] hr { border-color: #F1DFFF !important; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -170,7 +268,18 @@ if "visit_logged" not in st.session_state:
 rooms = load_rooms()
 now = datetime.now(timezone.utc)
 
-st.title("🎤 코인노래방 방 현황")
+st.markdown(
+    """
+    <div class="cute-header">
+        <span class="emoji">🎤</span>
+        <div>
+            <h1>코인노래방 방 현황</h1>
+            <div class="sub">실시간으로 빈 방을 확인하세요</div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 if not rooms:
     st.info("아직 등록된 방이 없습니다. 아래 관리자 메뉴에서 방을 추가해주세요.")
@@ -186,9 +295,14 @@ else:
     # 방마다 카드 내부 구성(제목 + 2열 지표)을 상태와 무관하게 항상 동일하게 유지한다.
     # 재실행마다 카드 안의 위젯 개수가 늘었다 줄었다 하면 Streamlit이 이전 값을 다 지우지
     # 못하고 옅게 남기는 경우가 있어서, 비어있을 때도 지표 자리를 "-"로 채워둔다.
+    # key 접두사(room_available_/room_occupied_)는 CSS에서 카드 색을 구분하는 용도.
     for room in empty_rooms:
-        with st.container(border=True, key=f"room_card_{room['id']}"):
-            st.markdown(f"### 🟢 {room['room_number']}호 — 사용 가능")
+        with st.container(border=True, key=f"room_available_{room['id']}"):
+            st.markdown(
+                f'<div class="room-card-head"><span class="room-num">{room["room_number"]}호</span>'
+                '<span class="status-pill available">사용 가능 ✨</span></div>',
+                unsafe_allow_html=True,
+            )
             col1, col2 = st.columns(2)
             col1.metric("남은 시간", "-")
             col2.metric("종료 예정", "-")
@@ -197,8 +311,12 @@ else:
         secs = remaining_seconds(room, now)
         mins, s = int(secs // 60), int(secs % 60)
         end_local = parse_end_time(room).astimezone(KST)
-        with st.container(border=True, key=f"room_card_{room['id']}"):
-            st.markdown(f"### 🔴 {room['room_number']}호")
+        with st.container(border=True, key=f"room_occupied_{room['id']}"):
+            st.markdown(
+                f'<div class="room-card-head"><span class="room-num">{room["room_number"]}호</span>'
+                '<span class="status-pill occupied">사용중 🎤</span></div>',
+                unsafe_allow_html=True,
+            )
             col1, col2 = st.columns(2)
             col1.metric("남은 시간", f"{mins}분 {s}초")
             col2.metric("종료 예정", end_local.strftime("%H:%M"))
