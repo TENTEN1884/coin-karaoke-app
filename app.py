@@ -247,7 +247,7 @@ st.markdown(
         display: block;
         text-decoration: none !important;
         border-radius: 20px;
-        padding: 14px 14px 28px;
+        padding: 14px;
         min-height: 70px;
         border: 2px solid transparent;
         box-shadow: 0 6px 16px rgba(168, 121, 217, 0.14);
@@ -258,10 +258,6 @@ st.markdown(
     .room-tile.occupied { background: #FFCBDB; border-color: #FF8FAA; }
     .room-tile .tile-num { display: block; font-family: 'Jua', sans-serif; font-size: 1.15rem; color: #3F3350; }
     .room-tile .tile-status { display: block; font-weight: 800; font-size: 0.8rem; color: #5C4F6B; margin-top: 4px; }
-    .room-tile .tile-tag {
-        position: absolute; bottom: 8px; right: 12px;
-        font-size: 0.62rem; font-weight: 800; letter-spacing: 0.03em; color: #5C4F6B; opacity: 0.6;
-    }
 
     /* 방 상세 화면의 "다른 방 보기" 링크 */
     .back-link {
@@ -441,15 +437,13 @@ def render_overview():
                 tiles.append(
                     f'<a href="{link}" target="_self" class="room-tile occupied">'
                     f'<span class="tile-num">{room["room_number"]}호</span>'
-                    f'<span class="tile-status">{mins}분 남음</span>'
-                    f'<span class="tile-tag">IN USE</span></a>'
+                    f'<span class="tile-status">{mins}분 남음</span></a>'
                 )
             else:
                 tiles.append(
                     f'<a href="{link}" target="_self" class="room-tile available">'
                     f'<span class="tile-num">{room["room_number"]}호</span>'
-                    f'<span class="tile-status">사용 가능</span>'
-                    f'<span class="tile-tag">EMPTY</span></a>'
+                    f'<span class="tile-status">사용 가능</span></a>'
                 )
         st.markdown(f'<div class="room-grid">{"".join(tiles)}</div>', unsafe_allow_html=True)
 
